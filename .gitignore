@@ -1,0 +1,50 @@
+# Build artifacts
+bin/
+dist/
+*.exe
+*.test
+*.out
+coverage.out
+coverage.html
+
+# Editor
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Local env
+.env
+.env.local
+.envrc
+.reproforge/cache/
+.reproforge/runs.db
+.reproforge/runs.db-*
+
+# Capsules and reports (generated)
+*.tar.zst
+*.capsule
+report-*.md
+diagnosis-*.json
+
+# Node
+action/node_modules/
+action/dist/index.js.map
+
+# Python virtualenv
+.venv/
+__pycache__/
+*.pyc
+
+# Go
+vendor/
+go.work
+go.work.sum
+
+# Allow internal docs/golden fixtures
+!fixtures/**/*.tar.zst
+!testdata/**/*.tar.zst
