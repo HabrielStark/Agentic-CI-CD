@@ -8,7 +8,6 @@ import (
 	"github.com/reproforge/reproforge/internal/capsule"
 	"github.com/reproforge/reproforge/internal/collect"
 	"github.com/reproforge/reproforge/internal/diagnose"
-	"github.com/reproforge/reproforge/internal/github"
 	"github.com/reproforge/reproforge/internal/report"
 	"github.com/spf13/cobra"
 )
@@ -96,5 +95,5 @@ func osWriteFile(p string, body []byte, mode uint32) error {
 	return writeWithMode(p, body, mode)
 }
 
-// suppress unused warning for github import (used elsewhere indirectly)
-var _ = github.RunRef{}
+// suppress unused warning for collect import
+var _ = collect.Options{}

@@ -12,10 +12,16 @@ reproforge capsule inspect <capsule>         summarise a tar.zst
 reproforge capsule extract <capsule> -d dst  extract a tar.zst
 reproforge diagnose <capsule>                classify a capsule
 reproforge report <capsule> --format ...     md/json/sarif/issue report
-reproforge replay <capsule> [--dry-run]      generate + run replay container
+reproforge replay <capsule> [--profile]      generate + run replay container
+reproforge shell <capsule>                   interactive bash in the replay container
 reproforge verify <capsule>                  replay and check exit code matches original
+reproforge verify-patch <capsule> --patch P  apply patch and confirm fix
 reproforge flake <capsule> --runs N          rerun N times to detect flakiness
 reproforge patch <capsule> --ai claude       request a sanitised AI patch plan
+reproforge lint <workflow|capsule>           static security/correctness lint
+reproforge migrate <capsule>                 portable Bash + Earthfile recipe
+reproforge history show --fingerprint <fp>   show recurrence
+reproforge history stats --repo <owner/r>    aggregate categories
 ```
 
 `<capsule>` accepts either a tar.zst path or an extracted directory.

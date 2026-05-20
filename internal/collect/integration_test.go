@@ -17,6 +17,7 @@ import (
 
 	"github.com/reproforge/reproforge/internal/capsule"
 	"github.com/reproforge/reproforge/internal/github"
+	"github.com/reproforge/reproforge/internal/provider"
 )
 
 func TestFromRun_EndToEnd(t *testing.T) {
@@ -81,7 +82,7 @@ func TestFromRun_EndToEnd(t *testing.T) {
 	// using a small monkey patch via the package-level test helper.
 
 	tmp := t.TempDir()
-	res, err := fromRunWithClientForTest(context.Background(), srv.URL, github.RunRef{Owner: "octocat", Repo: "hello-world", RunID: 42}, Options{
+	res, err := fromRunWithClientForTest(context.Background(), srv.URL, provider.RunRef{Owner: "octocat", Repo: "hello-world", RunID: 42}, Options{
 		OutputDir: tmp, Token: "x", Diagnose: true,
 	})
 	if err != nil {

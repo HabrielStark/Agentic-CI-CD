@@ -7,6 +7,7 @@ import (
 
 	"github.com/reproforge/reproforge/internal/collect"
 	"github.com/reproforge/reproforge/internal/github"
+	"github.com/reproforge/reproforge/internal/provider"
 	"github.com/spf13/cobra"
 )
 
@@ -17,6 +18,7 @@ func newCollectCmd() *cobra.Command {
 		repo   string
 		withArtifacts bool
 		alsoDiagnose bool
+		providerName string
 	)
 	cmd := &cobra.Command{
 		Use:   "collect",
@@ -30,6 +32,7 @@ func newCollectCmd() *cobra.Command {
 			res, err := collect.FromRun(ctx, ref, collect.Options{
 				OutputDir: flagOutputDir, IncludeArtifacts: withArtifacts,
 				Token: flagToken, Diagnose: alsoDiagnose, Logger: rootLogger,
+				Provider: providerName,
 			})
 			if err != nil {
 				return err
@@ -44,21 +47,34 @@ func newCollectCmd() *cobra.Command {
 	cmd.Flags().StringVar(&repo, "repo", "", "owner/repo")
 	cmd.Flags().BoolVar(&withArtifacts, "artifacts", false, "also download artifacts")
 	cmd.Flags().BoolVar(&alsoDiagnose, "diagnose", false, "compute diagnosis during collection")
+	cmd.Flags().StringVar(&providerName, "provider", "github_actions", "github_actions | gitlab_ci")
 	return cmd
 }
 
-func resolveRunRef(runURL string, runID int64, repo string) (github.RunRef, error) {
+// resolveRunRef returns a provider.RunRef from the user-facing flags.
+func resolveRunRef(runURL string, runID int64, repo string) (provider.RunRef, error) {
 	if runURL != "" {
-		return github.ParseRunURL(runURL)
+		ref, err := github.ParseRunURL(runURL)
+		if err == nil {
+			return provider.RunRef{Owner: ref.Owner, Repo: ref.Repo, RunID: ref.RunID, JobID: ref.JobID}, nil
+		}
+		// fall through and let provider Detect handle non-github URLs.
+		name, derr := provider.Detect(runURL)
+		if derr != nil {
+			return provider.RunRef{}, fmt.Errorf("unrecognised run URL: %v / %v", err, derr)
+		}
+		f, _ := provider.Get(name)
+		p := f("")
+		return p.Parse(runURL)
 	}
 	if runID == 0 || repo == "" {
-		return github.RunRef{}, errors.New("provide --url, or both --run and --repo")
+		return provider.RunRef{}, errors.New("provide --url, or both --run and --repo")
 	}
 	parts := splitRepo(repo)
 	if len(parts) != 2 {
-		return github.RunRef{}, errors.New("--repo must be owner/repo")
+		return provider.RunRef{}, errors.New("--repo must be owner/repo")
 	}
-	return github.RunRef{Owner: parts[0], Repo: parts[1], RunID: runID}, nil
+	return provider.RunRef{Owner: parts[0], Repo: parts[1], RunID: runID}, nil
 }
 
 func splitRepo(s string) []string {

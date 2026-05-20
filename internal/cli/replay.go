@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -21,6 +22,7 @@ func newReplayCmd() *cobra.Command {
 		dryRun                         bool
 		generateOnly                   bool
 		timeout                        int
+		profile                        bool
 	)
 	cmd := &cobra.Command{
 		Use:   "replay <capsule.tar.zst|capsule-dir>",
@@ -37,7 +39,7 @@ func newReplayCmd() *cobra.Command {
 				Mode: mode, Network: network, Image: image, Runtime: runtime,
 				MemoryMB: memoryMB, CPUs: cpus, EnvAllowlist: envs,
 				ExtraEnv: extraEnv, DryRun: dryRun, TimeoutSec: timeout,
-				WorkDir: capDir,
+				WorkDir: capDir, Profile: profile,
 			}
 			if err := eng.Generate(c, capDir, opts); err != nil {
 				return err
@@ -61,6 +63,13 @@ func newReplayCmd() *cobra.Command {
 			fmt.Fprintf(cmd.OutOrStdout(),
 				"replay: mode=%s network=%s exit=%d duration=%s reproduced=%s\n",
 				out.Mode, out.Network, out.ExitCode, out.Duration, repro)
+			if out.Profile != nil {
+				body, _ := json.MarshalIndent(out.Profile, "", "  ")
+				outPath := filepath.Join(capDir, "replay", "resource-profile.json")
+				_ = os.WriteFile(outPath, body, 0o644)
+				fmt.Fprintf(cmd.OutOrStdout(), "profile: peakCpu=%.1f%% peakMem=%dMB written=%s\n",
+					out.Profile.PeakCPUPct, out.Profile.PeakMemBytes/(1<<20), outPath)
+			}
 			return nil
 		},
 	}
@@ -75,6 +84,7 @@ func newReplayCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "generate replay scripts but do not execute")
 	cmd.Flags().BoolVar(&generateOnly, "generate-only", false, "alias for --dry-run")
 	cmd.Flags().IntVar(&timeout, "timeout", 1800, "max wall-clock seconds for replay")
+	cmd.Flags().BoolVar(&profile, "profile", false, "collect 1Hz CPU/memory/IO samples while the replay runs")
 	return cmd
 }
 

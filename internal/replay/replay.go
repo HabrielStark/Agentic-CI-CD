@@ -54,6 +54,8 @@ type Options struct {
 	Runtime string
 	// DryRun prints the command without executing it.
 	DryRun bool
+	// Profile enables 1Hz CPU/memory/IO sampling during replay (FR-026).
+	Profile bool
 	// WorkDir is the directory containing the unpacked capsule.
 	WorkDir string
 }
@@ -69,6 +71,7 @@ type Outcome struct {
 	Reason     string
 	Stdout     string
 	Stderr     string
+	Profile    *ResourceProfile
 }
 
 // Engine runs replays.
@@ -288,7 +291,8 @@ func shellEscape(s string) string {
 }
 
 // Run executes the generated replay against the capsule. It is a no-op for
-// DryRun mode.
+// DryRun mode. When opts.Profile is true the runtime container is polled
+// for CPU/memory/IO usage at 1Hz and the result is returned in Outcome.Profile.
 func (e *Engine) Run(ctx context.Context, c *capsule.Capsule, capsuleDir, sourceDir string, opts Options) (Outcome, error) {
 	if opts.Mode == "" {
 		opts.Mode = ModeFailedStep
@@ -353,7 +357,8 @@ func (e *Engine) Run(ctx context.Context, c *capsule.Capsule, capsuleDir, source
 	}
 
 	// Run image
-	runArgs := []string{"run", "--rm"}
+	containerName := "rf-" + shortFingerprint(c.Failure.Fingerprint) + "-" + fmt.Sprintf("%d", time.Now().UnixNano()%1000000)
+	runArgs := []string{"run", "--rm", "--name", containerName}
 	if opts.Network == NetworkDeny {
 		runArgs = append(runArgs, "--network", "none")
 	}
@@ -380,14 +385,29 @@ func (e *Engine) Run(ctx context.Context, c *capsule.Capsule, capsuleDir, source
 	var stdout, stderr strings.Builder
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
+
+	// Optional resource profiler (FR-026): poll `<runtime> stats` at 1Hz.
+	var profile *ResourceProfile
+	profileCh := make(chan *ResourceProfile, 1)
+	profileCancel := func() {}
+	if opts.Profile {
+		var profCtx context.Context
+		profCtx, profileCancel = context.WithCancel(runCtx)
+		go func() { profileCh <- profileLoop(profCtx, runtime, containerName) }()
+	}
+
 	start := time.Now()
 	err = cmd.Run()
 	dur := time.Since(start)
+	profileCancel()
+	if opts.Profile {
+		profile = <-profileCh
+	}
 
 	o := Outcome{
 		Mode: opts.Mode, Network: opts.Network,
 		Image: image, Stdout: stdout.String(), Stderr: stderr.String(),
-		Duration: dur,
+		Duration: dur, Profile: profile,
 	}
 	if err == nil {
 		o.ExitCode = 0

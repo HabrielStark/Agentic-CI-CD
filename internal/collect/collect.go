@@ -1,8 +1,6 @@
 // Package collect orchestrates the run-collection pipeline used by the
-// `reproforge collect` and `from-run` commands.
-//
-// It glues together the GitHub provider, redaction engine, log/test parsers,
-// fingerprint computation, capsule builder and (optionally) the diagnoser.
+// `reproforge collect` and `from-run` commands. It is provider-agnostic via
+// internal/provider; the GitHub Actions adapter is the default.
 package collect
 
 import (
@@ -17,82 +15,79 @@ import (
 	"strings"
 	"time"
 
+	"github.com/reproforge/reproforge/internal/cache"
 	"github.com/reproforge/reproforge/internal/capsule"
 	"github.com/reproforge/reproforge/internal/diagnose"
 	"github.com/reproforge/reproforge/internal/fingerprint"
-	"github.com/reproforge/reproforge/internal/github"
+	_ "github.com/reproforge/reproforge/internal/github" // register provider
+	_ "github.com/reproforge/reproforge/internal/gitlab" // register provider
 	"github.com/reproforge/reproforge/internal/logx"
 	"github.com/reproforge/reproforge/internal/parsers"
+	"github.com/reproforge/reproforge/internal/provider"
 	"github.com/reproforge/reproforge/internal/redaction"
 	"github.com/reproforge/reproforge/internal/version"
+	"github.com/reproforge/reproforge/internal/wflint"
 )
 
 // Options control the collection pipeline.
 type Options struct {
-	OutputDir       string
+	OutputDir        string
 	IncludeArtifacts bool
-	Provider        string // "github_actions" only for now
-	Token           string
-	Diagnose        bool
-	Logger          *logx.Logger
+	Provider         string // "github_actions" by default
+	Token            string
+	Diagnose         bool
+	WorkflowLint     bool
+	Logger           *logx.Logger
 }
 
 // Result is the outcome of a collection.
 type Result struct {
-	Capsule        *capsule.Capsule
-	CapsulePath    string
-	OutputDir      string
-	Diagnosis      *diagnose.Diagnosis
-	FailingTests   []string
-	JobLogs        map[int64][]byte // job id -> redacted bytes
-	WorkflowYAML   []byte
-	Run            *github.Run
-	Job            *github.Job
+	Capsule      *capsule.Capsule
+	CapsulePath  string
+	OutputDir    string
+	Diagnosis    *diagnose.Diagnosis
+	FailingTests []string
+	JobLogs      map[int64][]byte // job id -> redacted bytes
+	WorkflowYAML []byte
+	Run          *provider.Run
+	Job          *provider.Job
+	LintFindings []wflint.Finding
 }
 
-// FromRun runs the full pipeline for a GitHub Actions run URL or refspec.
-func FromRun(ctx context.Context, ref github.RunRef, opts Options) (*Result, error) {
+// FromRun runs the full pipeline for a given provider RunRef.
+func FromRun(ctx context.Context, ref provider.RunRef, opts Options) (*Result, error) {
 	if opts.Logger == nil {
 		opts.Logger = logx.Default()
 	}
 	if opts.OutputDir == "" {
 		opts.OutputDir = "./reproforge-out"
 	}
-	gh := newClientForCollect(opts.Token)
+	prov, err := buildProvider(opts.Provider, opts.Token)
+	if err != nil {
+		return nil, err
+	}
 
-	opts.Logger.Info("collect: fetch run", "repo", ref.FullRepo(), "run", ref.RunID)
-	run, err := gh.GetRun(ctx, ref)
+	opts.Logger.Info("collect: fetch run", "repo", ref.FullRepo(), "run", ref.RunID, "provider", prov.Name())
+	run, err := prov.FetchRun(ctx, ref)
 	if err != nil {
-		return nil, fmt.Errorf("get run: %w", err)
+		return nil, fmt.Errorf("fetch run: %w", err)
 	}
-	jobs, err := gh.ListJobs(ctx, ref)
-	if err != nil {
-		return nil, fmt.Errorf("list jobs: %w", err)
-	}
-	failedJob, failedStep := pickFailedJob(jobs, ref.JobID)
+	failedJob, failedStep := provider.PickFailedJob(run.Jobs, ref.JobID)
 	if failedJob == nil {
 		return nil, errors.New("no failed job in run")
 	}
 
 	opts.Logger.Info("collect: download workflow")
-	workflowYAML, err := gh.DownloadWorkflow(ctx, ref, run)
+	workflowYAML, err := prov.DownloadWorkflowYAML(ctx, ref, run)
 	if err != nil {
 		opts.Logger.Warn("could not fetch workflow yaml", "err", err)
 		workflowYAML = []byte{}
 	}
 
 	opts.Logger.Info("collect: download logs")
-	logsZip, err := gh.DownloadRunLogs(ctx, ref)
+	logsZip, err := prov.DownloadLogs(ctx, ref)
 	if err != nil {
-		// fall back to per-job logs
-		opts.Logger.Warn("run logs zip failed; trying per-job logs", "err", err)
-		jobBytes, jerr := gh.DownloadJobLogs(ctx, ref, failedJob.ID)
-		if jerr != nil {
-			return nil, fmt.Errorf("download logs: %w", jerr)
-		}
-		logsZip = map[string][]byte{
-			fmt.Sprintf("%s.txt", failedJob.Name): jobBytes,
-		}
+		return nil, fmt.Errorf("download logs: %w", err)
 	}
 
 	// redact logs
@@ -112,24 +107,29 @@ func FromRun(ctx context.Context, ref github.RunRef, opts Options) (*Result, err
 	// pick the focal log (the failed job's log)
 	scan, focalPath := scanFocalLogs(redactedLogs, failedJob.Name)
 
-	// parse failing tests from any junit-xml looking artifacts later if requested
+	// optionally lint workflow
+	var lintFindings []wflint.Finding
+	if opts.WorkflowLint && len(workflowYAML) > 0 {
+		lintFindings = wflint.Lint(workflowYAML)
+	}
+
+	// parse failing tests from artifacts when requested
 	var suites parsers.Suites
 	if opts.IncludeArtifacts {
-		artifacts, err := gh.ListArtifacts(ctx, ref)
-		if err != nil {
-			opts.Logger.Warn("list artifacts failed", "err", err)
+		artifacts, aerr := prov.ListArtifacts(ctx, ref)
+		if aerr != nil {
+			opts.Logger.Warn("list artifacts failed", "err", aerr)
 		}
 		for _, a := range artifacts {
 			if a.Expired || a.SizeInBytes > 50*1024*1024 {
 				continue
 			}
-			zipBytes, err := gh.DownloadArtifact(ctx, ref, a.ID)
-			if err != nil {
-				opts.Logger.Warn("artifact download failed", "name", a.Name, "err", err)
+			zipBytes, derr := prov.DownloadArtifact(ctx, ref, a.ID)
+			if derr != nil {
+				opts.Logger.Warn("artifact download failed", "name", a.Name, "err", derr)
 				continue
 			}
 			suites = append(suites, parseArtifactJUnit(zipBytes)...)
-			// store artifact
 			outDir := filepath.Join(opts.OutputDir, "artifacts", a.Name)
 			if err := os.MkdirAll(outDir, 0o755); err != nil {
 				return nil, err
@@ -149,29 +149,31 @@ func FromRun(ctx context.Context, ref github.RunRef, opts Options) (*Result, err
 	cmd := pickCommand(failedJob, failedStep)
 	fp := fingerprint.Compute(fingerprint.Input{
 		Command: cmd, ExitCode: scan.ExitCode,
-		Step: stepName(failedStep), FailingTests: failingNames,
-		ErrorClass: scan.ErrorClass, StackTopFrame: scan.StackTop,
-		Provider: "github_actions",
-		OS: failedJob.RunnerOS,
+		Step:          stepName(failedStep),
+		FailingTests:  failingNames,
+		ErrorClass:    scan.ErrorClass,
+		StackTopFrame: scan.StackTop,
+		Provider:      prov.Name(),
+		OS:            failedJob.RunnerOS,
 	})
 
 	cap_ := &capsule.Capsule{
 		Schema:    capsule.SchemaV1,
 		CreatedAt: time.Now().UTC(),
 		Generator: "reproforge " + version.Version,
-		Provider:  capsule.ProviderGitHub,
+		Provider:  prov.Name(),
 		Repo:      ref.FullRepo(),
 		Commit:    run.HeadSHA,
 		Branch:    run.HeadBranch,
-		Workflow:  filepath.Base(run.Path),
+		Workflow:  filepath.Base(run.Workflow),
 		Job:       failedJob.Name,
 		JobID:     failedJob.ID,
 		RunID:     ref.RunID,
 		RunURL:    run.URL,
 		Runner: capsule.Runner{
-			OS:     orDefault(failedJob.RunnerOS, "Linux"),
-			Arch:   "x86_64",
-			Image:  "",
+			OS: orDefault(failedJob.RunnerOS, "Linux"),
+			Arch: "x86_64",
+			Image: "",
 			Labels: failedJob.Labels,
 		},
 		Failure: capsule.Failure{
@@ -190,20 +192,18 @@ func FromRun(ctx context.Context, ref github.RunRef, opts Options) (*Result, err
 		},
 	}
 
-	// Optionally diagnose now and embed a summary in the capsule.
 	if opts.Diagnose {
 		d := diagnose.Classify(diagnose.Input{
 			LogScan: scan, Suites: suites,
 			WorkflowYAML: string(workflowYAML),
-			JobName: failedJob.Name, StepName: stepName(failedStep),
-			Command: cmd, OS: failedJob.RunnerOS, Provider: "github_actions",
+			JobName:      failedJob.Name, StepName: stepName(failedStep),
+			Command: cmd, OS: failedJob.RunnerOS, Provider: prov.Name(),
 		})
 		cap_.Diagnosis = &capsule.DiagnosisSummary{
 			Category: d.Category, Confidence: d.Confidence, Evidence: d.Evidence,
 		}
 	}
 
-	// Materialise capsule on disk under OutputDir/capsule/
 	capDir := filepath.Join(opts.OutputDir, "capsule")
 	if err := os.MkdirAll(capDir, 0o755); err != nil {
 		return nil, err
@@ -224,7 +224,7 @@ func FromRun(ctx context.Context, ref github.RunRef, opts Options) (*Result, err
 		})
 	}
 	if len(workflowYAML) > 0 {
-		out := filepath.Join(capDir, "workflow", filepath.Base(run.Path))
+		out := filepath.Join(capDir, "workflow", filepath.Base(run.Workflow))
 		if err := os.MkdirAll(filepath.Dir(out), 0o755); err != nil {
 			return nil, err
 		}
@@ -232,7 +232,12 @@ func FromRun(ctx context.Context, ref github.RunRef, opts Options) (*Result, err
 			return nil, err
 		}
 	}
-	// redaction report
+	if len(lintFindings) > 0 {
+		body, _ := jsonIndent(lintFindings)
+		out := filepath.Join(capDir, "workflow", "lint.json")
+		_ = os.MkdirAll(filepath.Dir(out), 0o755)
+		_ = os.WriteFile(out, body, 0o644)
+	}
 	rep := r.Report(sortedKeys(redactedLogs), allHits)
 	repBytes, _ := jsonIndent(rep)
 	if err := os.MkdirAll(filepath.Join(capDir, "redaction"), 0o755); err != nil {
@@ -240,6 +245,14 @@ func FromRun(ctx context.Context, ref github.RunRef, opts Options) (*Result, err
 	}
 	if err := os.WriteFile(filepath.Join(capDir, "redaction", "redaction-report.json"), repBytes, 0o644); err != nil {
 		return nil, err
+	}
+
+	// FR-028: capture cache hint files (lockfiles) so replay can prime caches.
+	if hints := cache.DetectHints(string(workflowYAML)); len(hints) > 0 {
+		cdir := filepath.Join(capDir, "cache")
+		_ = os.MkdirAll(cdir, 0o755)
+		hintBytes, _ := jsonIndent(hints)
+		_ = os.WriteFile(filepath.Join(cdir, "cache-hints.json"), hintBytes, 0o644)
 	}
 
 	if err := cap_.Validate(); err != nil {
@@ -250,69 +263,51 @@ func FromRun(ctx context.Context, ref github.RunRef, opts Options) (*Result, err
 		Capsule: cap_, OutputDir: opts.OutputDir,
 		Run: run, Job: failedJob, WorkflowYAML: workflowYAML,
 		FailingTests: failingNames,
-		JobLogs: map[int64][]byte{failedJob.ID: redactedLogs[focalPath]},
+		JobLogs:      map[int64][]byte{failedJob.ID: redactedLogs[focalPath]},
+		LintFindings: lintFindings,
 	}
-	if opts.Diagnose && cap_.Diagnosis != nil {
-		// expose full diagnosis
+	if opts.Diagnose {
 		d := diagnose.Classify(diagnose.Input{
 			LogScan: scan, Suites: suites,
 			WorkflowYAML: string(workflowYAML),
-			JobName: failedJob.Name, StepName: stepName(failedStep),
-			Command: cmd, OS: failedJob.RunnerOS, Provider: "github_actions",
+			JobName:      failedJob.Name, StepName: stepName(failedStep),
+			Command: cmd, OS: failedJob.RunnerOS, Provider: prov.Name(),
 		})
 		res.Diagnosis = &d
 	}
 	return res, nil
 }
 
-// pickFailedJob returns the first failing job (or the requested one).
-func pickFailedJob(jobs []github.Job, want int64) (*github.Job, *github.Step) {
-	for i := range jobs {
-		j := &jobs[i]
-		if want != 0 && j.ID != want {
-			continue
-		}
-		if !strings.EqualFold(j.Conclusion, "failure") &&
-			!strings.EqualFold(j.Conclusion, "timed_out") &&
-			!strings.EqualFold(j.Conclusion, "cancelled") {
-			continue
-		}
-		for k := range j.Steps {
-			st := &j.Steps[k]
-			if strings.EqualFold(st.Conclusion, "failure") || strings.EqualFold(st.Conclusion, "timed_out") {
-				return j, st
-			}
-		}
-		// fall back to the last step if none marked failure
-		if n := len(j.Steps); n > 0 {
-			return j, &j.Steps[n-1]
-		}
-		return j, nil
+func buildProvider(name, token string) (provider.Provider, error) {
+	if name == "" {
+		name = "github_actions"
 	}
-	if want == 0 && len(jobs) > 0 {
-		return &jobs[0], nil
+	if testProvider != nil {
+		return testProvider, nil
 	}
-	return nil, nil
+	f, err := provider.Get(name)
+	if err != nil {
+		return nil, err
+	}
+	return f(token), nil
 }
 
-func pickCommand(j *github.Job, st *github.Step) string {
+func pickCommand(j *provider.Job, st *provider.Step) string {
 	if st == nil || j == nil {
 		return ""
 	}
-	// We don't have raw command, but the step name is informative.
-	// Future: parse the workflow YAML and resolve `run:` for the matching step.
 	return ""
 }
 
-func stepName(st *github.Step) string {
+func stepName(st *provider.Step) string {
 	if st == nil {
 		return "unknown"
 	}
 	return st.Name
 }
 
-func defaultExit(j *github.Job, st *github.Step) int {
-	if st != nil && strings.EqualFold(st.Conclusion, "failure") {
+func defaultExit(j *provider.Job, st *provider.Step) int {
+	if st != nil && (strings.EqualFold(st.Conclusion, "failure") || strings.EqualFold(st.Conclusion, "failed")) {
 		return 1
 	}
 	if j != nil && strings.EqualFold(j.Conclusion, "timed_out") {
@@ -354,9 +349,6 @@ func sortedKeys(m map[string][]byte) []string {
 	return out
 }
 
-// scanFocalLogs picks a single representative log file for analysis. It
-// prefers files whose name contains the failed job name; otherwise falls back
-// to the largest file.
 func scanFocalLogs(logs map[string][]byte, jobName string) (parsers.LogScan, string) {
 	patterns := parsers.DefaultPatterns()
 	var bestPath string
@@ -380,7 +372,6 @@ func scanFocalLogs(logs map[string][]byte, jobName string) (parsers.LogScan, str
 	return bestScan, bestPath
 }
 
-// parseArtifactJUnit unzips an artifact and tries to parse JUnit XML inside.
 func parseArtifactJUnit(zipBytes []byte) parsers.Suites {
 	r, err := openZip(zipBytes)
 	if err != nil {
@@ -401,14 +392,10 @@ func parseArtifactJUnit(zipBytes []byte) parsers.Suites {
 	return out
 }
 
-// jsonIndent is a thin helper to keep imports tidy.
 func jsonIndent(v any) ([]byte, error) {
 	return jsonMarshalIndent(v)
 }
 
-
-
-// newClientForCollect is indirected to make integration testing possible.
-var newClientForCollect = func(token string) *github.Client {
-	return github.NewClient(token)
-}
+// testProvider, when non-nil, replaces the registered provider lookup. Used
+// by integration tests to inject a fake.
+var testProvider provider.Provider

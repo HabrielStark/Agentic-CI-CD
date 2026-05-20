@@ -46,8 +46,13 @@ func NewRoot() *cobra.Command {
 	cmd.AddCommand(newReportCmd())
 	cmd.AddCommand(newPatchCmd())
 	cmd.AddCommand(newVerifyCmd())
+	cmd.AddCommand(newVerifyPatchCmd())
 	cmd.AddCommand(newFromRunCmd())
 	cmd.AddCommand(newSchemaCmd())
+	cmd.AddCommand(newLintCmd())
+	cmd.AddCommand(newShellCmd())
+	cmd.AddCommand(newMigrateCmd())
+	cmd.AddCommand(newHistoryCmd())
 
 	return cmd
 }
