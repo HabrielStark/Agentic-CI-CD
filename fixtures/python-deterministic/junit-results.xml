@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuites tests="2" failures="1" errors="0" time="0.05">
+  <testsuite name="tests.test_arith" tests="2" failures="1" errors="0" time="0.05">
+    <testcase classname="tests.test_arith" name="test_add_is_correct" file="tests/test_arith.py" line="6" time="0.02">
+      <failure type="AssertionError" message="assert add(2, 2) == 5">Traceback (most recent call last):
+  File "/runner/_work/repo/repo/tests/test_arith.py", line 9, in test_add_is_correct
+    assert add(2, 2) == 5
+AssertionError: assert add(2, 2) == 5
+ +  where 4 = add(2, 2)
+</failure>
+    </testcase>
+    <testcase classname="tests.test_arith" name="test_subtract_is_correct" file="tests/test_arith.py" line="14" time="0.01"/>
+  </testsuite>
+</testsuites>

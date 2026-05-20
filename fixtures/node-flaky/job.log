@@ -1,0 +1,10 @@
+2026-05-20T12:00:00Z ##[group]Run npm test
+2026-05-20T12:00:01Z + npm test
+2026-05-20T12:00:01Z 
+2026-05-20T12:00:01Z FAIL  test/timing.test.mjs > eventually resolves within 50ms
+2026-05-20T12:00:01Z AssertionError: expected 71 to be less than 60
+2026-05-20T12:00:01Z   ❯ test/timing.test.mjs:9:23
+2026-05-20T12:00:01Z 
+2026-05-20T12:00:01Z Test Files  1 failed (1)
+2026-05-20T12:00:01Z      Tests  1 failed (1)
+2026-05-20T12:00:01Z ##[error]Process completed with exit code 1.

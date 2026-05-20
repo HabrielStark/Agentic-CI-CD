@@ -1,0 +1,306 @@
+// Package report generates Markdown / JSON / SARIF-like reports from a
+// capsule + diagnosis pair.
+package report
+
+import (
+	"encoding/json"
+	"fmt"
+	"sort"
+	"strings"
+	"time"
+
+	"github.com/reproforge/reproforge/internal/capsule"
+	"github.com/reproforge/reproforge/internal/diagnose"
+)
+
+// Bundle is the input to all reporters.
+type Bundle struct {
+	Capsule   *capsule.Capsule
+	Diagnosis diagnose.Diagnosis
+	// FlakeStats is optional: a flake-runner summary embedded in reports.
+	FlakeStats *FlakeStats
+	// Replay is optional: replay outcome to embed.
+	Replay *ReplayOutcome
+}
+
+// FlakeStats summarises N-rerun results.
+type FlakeStats struct {
+	Target  string `json:"target"`
+	Runs    int    `json:"runs"`
+	Passed  int    `json:"passed"`
+	Failed  int    `json:"failed"`
+	Skipped int    `json:"skipped"`
+	Mode    string `json:"mode"`
+}
+
+// IsFlaky returns true if both pass and fail outcomes were observed.
+func (f *FlakeStats) IsFlaky() bool {
+	if f == nil {
+		return false
+	}
+	return f.Passed > 0 && f.Failed > 0
+}
+
+// ReplayOutcome reports the result of a replay run.
+type ReplayOutcome struct {
+	Mode          string `json:"mode"`
+	Network       string `json:"network"`
+	ExitCode      int    `json:"exitCode"`
+	OriginalExit  int    `json:"originalExitCode"`
+	Reproduced    bool   `json:"reproduced"`
+	DurationMs    int64  `json:"durationMs"`
+	NotReproducedReason string `json:"notReproducedReason,omitempty"`
+}
+
+// Markdown returns a PR/issue-ready markdown report.
+func Markdown(b Bundle) string {
+	if b.Capsule == nil {
+		return "# ReproForge report\n\n(no capsule)\n"
+	}
+	c := b.Capsule
+	d := b.Diagnosis
+
+	var sb strings.Builder
+	fmt.Fprintf(&sb, "# 🛠️ ReproForge CI Report\n\n")
+	fmt.Fprintf(&sb, "**Repo:** `%s`  \n", c.Repo)
+	fmt.Fprintf(&sb, "**Workflow:** `%s` &middot; **Job:** `%s`  \n", c.Workflow, c.Job)
+	fmt.Fprintf(&sb, "**Commit:** `%s`  \n", short(c.Commit, 12))
+	if c.RunURL != "" {
+		fmt.Fprintf(&sb, "**Run:** %s  \n", c.RunURL)
+	}
+	fmt.Fprintf(&sb, "**Generated:** %s\n\n", time.Now().UTC().Format(time.RFC3339))
+
+	fmt.Fprintf(&sb, "## Summary\n\n")
+	fmt.Fprintf(&sb, "| Field | Value |\n| --- | --- |\n")
+	fmt.Fprintf(&sb, "| Failure step | `%s` |\n", c.Failure.Step)
+	if c.Failure.Command != "" {
+		fmt.Fprintf(&sb, "| Failed command | `%s` |\n", inlineEscape(c.Failure.Command))
+	}
+	fmt.Fprintf(&sb, "| Exit code | `%d` |\n", c.Failure.ExitCode)
+	fmt.Fprintf(&sb, "| Failure fingerprint | `%s` |\n", c.Failure.Fingerprint)
+	fmt.Fprintf(&sb, "| Diagnosis | **%s** (confidence %.2f) |\n", humanCategory(d.Category), d.Confidence)
+	fmt.Fprintf(&sb, "| Redaction | `%s` (%d rules, %d hits) |\n", c.Redaction.Status, c.Redaction.Rules, c.Redaction.Hits)
+	if d.ErrorClass != "" {
+		fmt.Fprintf(&sb, "| Error class | `%s` |\n", d.ErrorClass)
+	}
+	if d.StackTop != "" {
+		fmt.Fprintf(&sb, "| Stack top | `%s` |\n", d.StackTop)
+	}
+	fmt.Fprintf(&sb, "\n")
+
+	if len(d.Tests) > 0 {
+		fmt.Fprintf(&sb, "## Failing tests\n\n")
+		for _, t := range d.Tests {
+			fmt.Fprintf(&sb, "- `%s`\n", t)
+		}
+		fmt.Fprintf(&sb, "\n")
+	}
+
+	if len(d.Evidence) > 0 {
+		fmt.Fprintf(&sb, "## Evidence\n\n")
+		fmt.Fprintf(&sb, "```text\n")
+		for _, e := range d.Evidence {
+			fmt.Fprintf(&sb, "%s\n", e)
+		}
+		fmt.Fprintf(&sb, "```\n\n")
+	}
+
+	if b.Replay != nil {
+		fmt.Fprintf(&sb, "## Replay\n\n")
+		repro := "❌ not reproduced"
+		if b.Replay.Reproduced {
+			repro = "✅ reproduced"
+		}
+		fmt.Fprintf(&sb, "Status: %s  \n", repro)
+		fmt.Fprintf(&sb, "Mode: `%s`, Network: `%s`, Exit code: `%d` (original `%d`), Duration: `%d ms`\n\n",
+			b.Replay.Mode, b.Replay.Network, b.Replay.ExitCode, b.Replay.OriginalExit, b.Replay.DurationMs)
+		if b.Replay.NotReproducedReason != "" {
+			fmt.Fprintf(&sb, "> %s\n\n", b.Replay.NotReproducedReason)
+		}
+	}
+
+	if b.FlakeStats != nil {
+		fmt.Fprintf(&sb, "## Flake check\n\n")
+		flakey := "stable"
+		if b.FlakeStats.IsFlaky() {
+			flakey = "**flaky**"
+		}
+		fmt.Fprintf(&sb, "Target `%s` over %d runs: passed %d, failed %d, skipped %d → %s\n\n",
+			b.FlakeStats.Target, b.FlakeStats.Runs, b.FlakeStats.Passed, b.FlakeStats.Failed, b.FlakeStats.Skipped, flakey)
+	}
+
+	fmt.Fprintf(&sb, "## Suggested next actions\n\n")
+	if len(d.NextActions) == 0 {
+		fmt.Fprintf(&sb, "_No automatic suggestion. Inspect the raw log and replay the step locally._\n\n")
+	} else {
+		for _, a := range d.NextActions {
+			fmt.Fprintf(&sb, "- %s\n", a)
+		}
+		fmt.Fprintf(&sb, "\n")
+	}
+
+	if len(d.Commands) > 0 {
+		fmt.Fprintf(&sb, "### Replay commands\n\n```bash\n")
+		for _, cmd := range d.Commands {
+			fmt.Fprintf(&sb, "%s\n", cmd)
+		}
+		fmt.Fprintf(&sb, "```\n\n")
+	}
+
+	if len(c.Logs) > 0 {
+		fmt.Fprintf(&sb, "## Capsule contents\n\n")
+		for _, l := range c.Logs {
+			fmt.Fprintf(&sb, "- `%s` (%d bytes, sha256:%s)\n", l.Path, l.Size, short(l.SHA256, 12))
+		}
+		fmt.Fprintf(&sb, "\n")
+	}
+
+	fmt.Fprintf(&sb, "---\n")
+	fmt.Fprintf(&sb, "_Report generated by ReproForge CI. Diagnosis is evidence-based; AI suggestions are clearly marked when present._\n")
+	return sb.String()
+}
+
+// JSON produces a machine readable JSON report.
+func JSON(b Bundle) ([]byte, error) {
+	out := map[string]any{
+		"schema":    "reproforge.report/v1",
+		"createdAt": time.Now().UTC().Format(time.RFC3339),
+		"capsule":   b.Capsule,
+		"diagnosis": b.Diagnosis,
+	}
+	if b.FlakeStats != nil {
+		out["flake"] = b.FlakeStats
+	}
+	if b.Replay != nil {
+		out["replay"] = b.Replay
+	}
+	return json.MarshalIndent(out, "", "  ")
+}
+
+// SARIF returns a SARIF-like JSON document. We intentionally produce the most
+// useful subset (rules + results) so the report can be loaded by SARIF viewers
+// and uploaded via `github/codeql-action/upload-sarif` if desired.
+func SARIF(b Bundle) ([]byte, error) {
+	c := b.Capsule
+	d := b.Diagnosis
+
+	rule := map[string]any{
+		"id":   "reproforge/" + d.Category,
+		"name": humanCategory(d.Category),
+		"shortDescription": map[string]any{
+			"text": humanCategory(d.Category),
+		},
+		"fullDescription": map[string]any{
+			"text": strings.Join(d.NextActions, " "),
+		},
+		"defaultConfiguration": map[string]any{
+			"level": "error",
+		},
+	}
+	result := map[string]any{
+		"ruleId": "reproforge/" + d.Category,
+		"level":  "error",
+		"message": map[string]any{
+			"text": fmt.Sprintf("%s — confidence %.2f", humanCategory(d.Category), d.Confidence),
+		},
+		"locations": []any{
+			map[string]any{
+				"logicalLocations": []any{
+					map[string]any{
+						"name": c.Job,
+						"kind": "job",
+					},
+				},
+				"message": map[string]any{
+					"text": fmt.Sprintf("step=%s command=%s", c.Failure.Step, c.Failure.Command),
+				},
+			},
+		},
+		"properties": map[string]any{
+			"fingerprint":  c.Failure.Fingerprint,
+			"failingTests": d.Tests,
+			"evidence":     d.Evidence,
+			"errorClass":   d.ErrorClass,
+		},
+	}
+	doc := map[string]any{
+		"version": "2.1.0",
+		"$schema": "https://json.schemastore.org/sarif-2.1.0.json",
+		"runs": []any{
+			map[string]any{
+				"tool": map[string]any{
+					"driver": map[string]any{
+						"name":    "reproforge",
+						"version": "0.1.0",
+						"informationUri": "https://github.com/reproforge/reproforge",
+						"rules":   []any{rule},
+					},
+				},
+				"results":            []any{result},
+				"automationDetails":  map[string]any{"id": "reproforge/" + c.Repo},
+				"originalUriBaseIds": map[string]any{"REPO": map[string]any{"uri": "https://github.com/" + c.Repo}},
+			},
+		},
+	}
+	return json.MarshalIndent(doc, "", "  ")
+}
+
+// IssueTemplate produces a short Markdown body for issue creation.
+func IssueTemplate(b Bundle) string {
+	c := b.Capsule
+	d := b.Diagnosis
+	var sb strings.Builder
+	fmt.Fprintf(&sb, "## ReproForge: %s\n\n", humanCategory(d.Category))
+	fmt.Fprintf(&sb, "Repo `%s` workflow `%s` job `%s` failed at step `%s`.\n\n",
+		c.Repo, c.Workflow, c.Job, c.Failure.Step)
+	if len(d.Tests) > 0 {
+		fmt.Fprintf(&sb, "Failing tests:\n")
+		for _, t := range d.Tests {
+			fmt.Fprintf(&sb, "- `%s`\n", t)
+		}
+		fmt.Fprintf(&sb, "\n")
+	}
+	fmt.Fprintf(&sb, "Fingerprint: `%s`\n\n", c.Failure.Fingerprint)
+	if len(d.Evidence) > 0 {
+		fmt.Fprintf(&sb, "Evidence:\n```\n")
+		for _, e := range d.Evidence {
+			fmt.Fprintf(&sb, "%s\n", e)
+		}
+		fmt.Fprintf(&sb, "```\n")
+	}
+	return sb.String()
+}
+
+func humanCategory(c string) string {
+	parts := strings.Split(c, "_")
+	for i, p := range parts {
+		if len(p) > 0 {
+			parts[i] = strings.ToUpper(p[:1]) + p[1:]
+		}
+	}
+	return strings.Join(parts, " ")
+}
+
+func short(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n]
+}
+
+func inlineEscape(s string) string {
+	s = strings.ReplaceAll(s, "`", "ʼ")
+	if len(s) > 200 {
+		s = s[:200] + "…"
+	}
+	return s
+}
+
+// Sort logs by path so the output is deterministic.
+func sortLogs(in []capsule.LogFile) []capsule.LogFile {
+	out := append([]capsule.LogFile(nil), in...)
+	sort.Slice(out, func(i, j int) bool { return out[i].Path < out[j].Path })
+	return out
+}
+
+var _ = sortLogs // referenced for potential future use; suppress unused warning

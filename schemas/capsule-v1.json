@@ -1,0 +1,117 @@
+{
+  "title": "ReproForge Capsule Manifest v1",
+  "schemaVersion": "reproforge.capsule/v1",
+  "type": "object",
+  "required": [
+    "schema", "createdAt", "generator", "provider", "repo", "commit",
+    "workflow", "job", "runner", "failure", "replay", "redaction"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema": { "type": "string", "const": "reproforge.capsule/v1" },
+    "createdAt": { "type": "string", "format": "date-time" },
+    "generator": { "type": "string" },
+    "provider": { "type": "string", "minLength": 1 },
+    "repo": { "type": "string", "minLength": 1 },
+    "commit": { "type": "string", "minLength": 1 },
+    "branch": { "type": "string" },
+    "workflow": { "type": "string", "minLength": 1 },
+    "job": { "type": "string", "minLength": 1 },
+    "jobId": { "type": "integer" },
+    "runId": { "type": "integer" },
+    "runUrl": { "type": "string" },
+    "runner": {
+      "type": "object",
+      "required": ["os", "arch"],
+      "additionalProperties": false,
+      "properties": {
+        "os": { "type": "string", "minLength": 1 },
+        "arch": { "type": "string", "minLength": 1 },
+        "image": { "type": "string" },
+        "labels": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "failure": {
+      "type": "object",
+      "required": ["step", "exitCode", "fingerprint"],
+      "additionalProperties": false,
+      "properties": {
+        "step": { "type": "string", "minLength": 1 },
+        "command": { "type": "string" },
+        "exitCode": { "type": "integer" },
+        "fingerprint": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+        "category": { "type": "string" },
+        "failingTests": { "type": "array", "items": { "type": "string" } },
+        "startedAt": { "type": "string", "format": "date-time" },
+        "finishedAt": { "type": "string", "format": "date-time" }
+      }
+    },
+    "replay": {
+      "type": "object",
+      "required": ["modes", "network"],
+      "additionalProperties": false,
+      "properties": {
+        "modes": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "enum": ["full-job", "failed-step", "test-only", "dependency-install"]
+          }
+        },
+        "network": {
+          "type": "string",
+          "enum": ["allow", "deny", "configurable"]
+        }
+      }
+    },
+    "redaction": {
+      "type": "object",
+      "required": ["status", "rules"],
+      "additionalProperties": false,
+      "properties": {
+        "status": { "type": "string" },
+        "rules": { "type": "integer", "minimum": 0 },
+        "hits":  { "type": "integer", "minimum": 0 }
+      }
+    },
+    "logs": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["path", "job", "sha256"],
+        "additionalProperties": false,
+        "properties": {
+          "path": { "type": "string" },
+          "job":  { "type": "string" },
+          "step": { "type": "string" },
+          "size": { "type": "integer", "minimum": 0 },
+          "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+        }
+      }
+    },
+    "artifacts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name", "path"],
+        "additionalProperties": false,
+        "properties": {
+          "name": { "type": "string" },
+          "path": { "type": "string" },
+          "size": { "type": "integer", "minimum": 0 },
+          "sha256": { "type": "string" }
+        }
+      }
+    },
+    "diagnosis": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "category": { "type": "string" },
+        "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+        "evidence": { "type": "array", "items": { "type": "string" } }
+      }
+    }
+  }
+}

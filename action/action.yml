@@ -1,0 +1,58 @@
+name: 'ReproForge CI'
+description: 'Reproduce, diagnose, and report CI failures with sanitised capsules and verified replay.'
+author: 'ReproForge Authors'
+branding:
+  icon: 'shield'
+  color: 'blue'
+
+inputs:
+  run-id:
+    description: 'GitHub Actions workflow_run.id to analyse. Defaults to ${{ github.event.workflow_run.id }} or current run.'
+    required: false
+    default: ''
+  repository:
+    description: 'owner/repo to query. Defaults to ${{ github.repository }}.'
+    required: false
+    default: ''
+  github-token:
+    description: 'Token used to query the Actions API. Should have actions:read.'
+    required: false
+    default: ${{ github.token }}
+  comment-pr:
+    description: 'Post a Markdown report comment on associated PRs.'
+    required: false
+    default: 'false'
+  upload-capsule:
+    description: 'Upload the capsule tar.zst as an artifact.'
+    required: false
+    default: 'true'
+  artifact-name:
+    description: 'Artifact name for the uploaded capsule.'
+    required: false
+    default: 'reproforge-capsule'
+  reproforge-version:
+    description: 'Version/branch of reproforge source to build from this repo. Defaults to "current".'
+    required: false
+    default: 'current'
+  ai:
+    description: 'AI provider to use for optional patch suggestions: none|local|claude|openai.'
+    required: false
+    default: 'none'
+  output-dir:
+    description: 'Directory under runner to write the capsule and report.'
+    required: false
+    default: 'reproforge-out'
+
+outputs:
+  capsule-path:
+    description: 'Path to the generated capsule tar.zst.'
+  report-path:
+    description: 'Path to the generated Markdown report.'
+  diagnosis-category:
+    description: 'Diagnosis category produced by the rule-based classifier.'
+  fingerprint:
+    description: 'Stable fingerprint of the failure.'
+
+runs:
+  using: 'node20'
+  main: 'dist/index.js'

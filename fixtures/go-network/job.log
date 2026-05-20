@@ -1,0 +1,6 @@
+2026-05-20T12:00:00Z ##[group]Run go build ./...
+2026-05-20T12:00:01Z + go build ./...
+2026-05-20T12:00:01Z go: downloading github.com/foo/bar v1.0.0
+2026-05-20T12:00:02Z go: github.com/foo/bar@v1.0.0: dial tcp: lookup proxy.golang.org: temporary failure in name resolution
+2026-05-20T12:00:02Z go: error loading module requirements
+2026-05-20T12:00:02Z ##[error]Process completed with exit code 1.
