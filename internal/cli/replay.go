@@ -23,6 +23,7 @@ func newReplayCmd() *cobra.Command {
 		generateOnly                   bool
 		timeout                        int
 		profile                        bool
+		trace                          string
 	)
 	cmd := &cobra.Command{
 		Use:   "replay <capsule.tar.zst|capsule-dir>",
@@ -40,6 +41,7 @@ func newReplayCmd() *cobra.Command {
 				MemoryMB: memoryMB, CPUs: cpus, EnvAllowlist: envs,
 				ExtraEnv: extraEnv, DryRun: dryRun, TimeoutSec: timeout,
 				WorkDir: capDir, Profile: profile,
+				Trace: replay.TraceMode(trace),
 			}
 			if err := eng.Generate(c, capDir, opts); err != nil {
 				return err
@@ -85,6 +87,7 @@ func newReplayCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&generateOnly, "generate-only", false, "alias for --dry-run")
 	cmd.Flags().IntVar(&timeout, "timeout", 1800, "max wall-clock seconds for replay")
 	cmd.Flags().BoolVar(&profile, "profile", false, "collect 1Hz CPU/memory/IO samples while the replay runs")
+	cmd.Flags().StringVar(&trace, "trace", "", "wrap failed command in tracer: strace|ltrace")
 	return cmd
 }
 

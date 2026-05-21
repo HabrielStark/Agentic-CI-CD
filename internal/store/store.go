@@ -245,3 +245,30 @@ func nonZeroTime(t time.Time) time.Time {
 	}
 	return t.UTC()
 }
+
+
+// HistoryByCategory returns recent runs for a repo and category (newest first).
+func (s *Store) HistoryByCategory(ctx context.Context, repo, category string, limit int) ([]RunRecord, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT id, repo, provider, workflow, job, run_id, commit_sha, fingerprint, category, confidence, created_at, capsule_path FROM runs WHERE repo = ? AND category = ? ORDER BY id DESC LIMIT ?`,
+		repo, category, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []RunRecord
+	for rows.Next() {
+		var r RunRecord
+		var ts string
+		if err := rows.Scan(&r.ID, &r.Repo, &r.Provider, &r.Workflow, &r.Job, &r.RunID, &r.CommitSHA, &r.Fingerprint, &r.Category, &r.Confidence, &ts, &r.CapsulePath); err != nil {
+			return nil, err
+		}
+		t, _ := time.Parse(time.RFC3339Nano, ts)
+		r.CreatedAt = t
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}

@@ -88,3 +88,33 @@ requirement FR-033.
 - **CI**: pinned `actions/checkout`, `actions/setup-go`, `actions/setup-node`
   by SHA, govulncheck job, race-mode test job, action self-test job,
   binary smoke test job.
+
+
+## 0.2.0 — 2026-05-20
+
+Closes the SRS P2 list. Now every FR-001..FR-033 has working code, tests
+and (where applicable) a real-runtime smoke check.
+
+### Added
+
+- **FR-030 ML ranking layer** — `internal/mlrank` trains a small Naive
+  Bayes model from the local SQLite history and re-ranks the rule-based
+  diagnosis confidences. Calibration preserves the rule floor (NFR-008).
+  `internal/diagnose.Rerank()` is the entry point; it is a no-op when
+  the store is empty.
+- **FR-031 self-hosted server** — `internal/server` ships a small,
+  opt-in HTTP service with `POST /api/v1/capsules`, `GET /capsules/:fp`,
+  `GET /diagnoses/:fp`, `GET /healthz`. Bearer-token auth, content-addressed
+  storage, body size cap. CLI: `reproforge serve --token T`.
+- **FR-032 strace/ltrace mode** — `internal/replay/trace.go` injects an
+  in-container install + `strace -f` (or `ltrace`) prefix into the
+  failed-step. New flag `reproforge replay --trace strace|ltrace`.
+- **TypeScript wrapper compiles** — `tsconfig.json` now sets
+  `ignoreDeprecations: 6.0` so the action source compiles with TS 7
+  forward-compatibility; the hand-written `dist/index.js` and the
+  tsc-emitted output were verified to be functionally equivalent.
+
+### Changed
+
+- `internal/store` gained `HistoryByCategory` so the ML layer can pull
+  per-category histories without inventing new schemas.

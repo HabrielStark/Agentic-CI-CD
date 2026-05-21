@@ -56,6 +56,9 @@ type Options struct {
 	DryRun bool
 	// Profile enables 1Hz CPU/memory/IO sampling during replay (FR-026).
 	Profile bool
+	// Trace, when non-empty, wraps the failed command in strace/ltrace
+	// (FR-032). The tool is installed inside the container on demand.
+	Trace TraceMode
 	// WorkDir is the directory containing the unpacked capsule.
 	WorkDir string
 }
@@ -121,6 +124,13 @@ func (e *Engine) Generate(c *capsule.Capsule, destDir string, opts Options) erro
 	}
 
 	failed := generateFailedStepScript(c)
+	if opts.Trace != TraceOff {
+		patched, err := applyTrace(failed, opts.Trace)
+		if err != nil {
+			return err
+		}
+		failed = patched
+	}
 	if err := os.WriteFile(filepath.Join(destDir, "replay", "failed-step.sh"), []byte(failed), 0o755); err != nil {
 		return err
 	}

@@ -13,6 +13,7 @@ reproforge capsule extract <capsule> -d dst  extract a tar.zst
 reproforge diagnose <capsule>                classify a capsule
 reproforge report <capsule> --format ...     md/json/sarif/issue report
 reproforge replay <capsule> [--profile]      generate + run replay container
+reproforge replay <capsule> --trace strace   wrap failed step in strace (FR-032)
 reproforge shell <capsule>                   interactive bash in the replay container
 reproforge verify <capsule>                  replay and check exit code matches original
 reproforge verify-patch <capsule> --patch P  apply patch and confirm fix
@@ -22,6 +23,7 @@ reproforge lint <workflow|capsule>           static security/correctness lint
 reproforge migrate <capsule>                 portable Bash + Earthfile recipe
 reproforge history show --fingerprint <fp>   show recurrence
 reproforge history stats --repo <owner/r>    aggregate categories
+reproforge serve --token T --addr :8080      self-hosted capsule sharing (FR-031)
 ```
 
 `<capsule>` accepts either a tar.zst path or an extracted directory.

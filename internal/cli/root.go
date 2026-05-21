@@ -53,6 +53,7 @@ func NewRoot() *cobra.Command {
 	cmd.AddCommand(newShellCmd())
 	cmd.AddCommand(newMigrateCmd())
 	cmd.AddCommand(newHistoryCmd())
+	cmd.AddCommand(newServeCmd())
 
 	return cmd
 }
