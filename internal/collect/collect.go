@@ -21,7 +21,9 @@ import (
 	"github.com/reproforge/reproforge/internal/fingerprint"
 	_ "github.com/reproforge/reproforge/internal/github" // register provider
 	_ "github.com/reproforge/reproforge/internal/gitlab" // register provider
+	_ "github.com/reproforge/reproforge/internal/buildkite" // register provider
 	"github.com/reproforge/reproforge/internal/logx"
+	"github.com/reproforge/reproforge/internal/workflow"
 	"github.com/reproforge/reproforge/internal/parsers"
 	"github.com/reproforge/reproforge/internal/provider"
 	"github.com/reproforge/reproforge/internal/redaction"
@@ -146,7 +148,7 @@ func FromRun(ctx context.Context, ref provider.RunRef, opts Options) (*Result, e
 		failingNames = append(failingNames, tc.FullName())
 	}
 
-	cmd := pickCommand(failedJob, failedStep)
+	cmd := extractCommandFromWorkflow(workflowYAML, stepName(failedStep))
 	fp := fingerprint.Compute(fingerprint.Input{
 		Command: cmd, ExitCode: scan.ExitCode,
 		Step:          stepName(failedStep),
@@ -296,7 +298,26 @@ func pickCommand(j *provider.Job, st *provider.Step) string {
 	if st == nil || j == nil {
 		return ""
 	}
+	// Command extraction happens later via extractCommandFromWorkflow
 	return ""
+}
+
+// extractCommandFromWorkflow uses the parsed workflow YAML to find the
+// run: command for the failing step. This is the critical path that makes
+// capsule.Failure.Command non-empty.
+func extractCommandFromWorkflow(wfBody []byte, stepName string) string {
+	if len(wfBody) == 0 || stepName == "" {
+		return ""
+	}
+	w, err := workflow.Parse(wfBody)
+	if err != nil {
+		return ""
+	}
+	_, step, ok := w.FindStep(stepName)
+	if !ok || step == nil {
+		return ""
+	}
+	return step.ExtractCommand()
 }
 
 func stepName(st *provider.Step) string {
