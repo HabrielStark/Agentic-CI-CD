@@ -35,6 +35,11 @@ diagnosis-*.json
 action/node_modules/
 action/dist/index.js.map
 
+# The compiled action entrypoint is shipped so `runs.main: dist/index.js`
+# works when the action is consumed directly from the repo.
+!action/dist/
+!action/dist/index.js
+
 # Python virtualenv
 .venv/
 __pycache__/

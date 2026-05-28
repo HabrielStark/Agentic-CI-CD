@@ -1,0 +1,5 @@
+# Keep the action build inputs/outputs LF-normalised so the compiled
+# dist produced on any platform matches the committed artifact byte-for-byte.
+action/src/*.ts text eol=lf
+action/scripts/*.cjs text eol=lf
+action/dist/index.js text eol=lf

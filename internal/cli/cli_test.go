@@ -40,6 +40,11 @@ func TestSchema(t *testing.T) {
 
 func TestInit_WritesConfig(t *testing.T) {
 	tmp := t.TempDir()
+	orig, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(orig) })
 	if err := os.Chdir(tmp); err != nil {
 		t.Fatal(err)
 	}
