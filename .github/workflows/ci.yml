@@ -85,7 +85,23 @@ jobs:
         with:
           node-version: '20'
 
-      - name: Self-test
+      - name: Install action deps
+        working-directory: action
+        run: npm ci
+
+      - name: Build action
+        working-directory: action
+        run: npm run build
+
+      - name: Verify committed dist is up to date
+        run: |
+          if ! git diff --quiet -- action/dist; then
+            echo "::error::action/dist is stale. Run 'npm --prefix action run build' and commit the result."
+            git --no-pager diff -- action/dist
+            exit 1
+          fi
+
+      - name: Self-test (committed dist)
         run: node action/dist/index.js --self-test
 
   binary-smoke:
