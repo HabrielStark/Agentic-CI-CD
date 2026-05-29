@@ -85,6 +85,74 @@ func TestPickTestCommand(t *testing.T) {
 	}
 }
 
+func TestPrepareBuildContext_MissingSource(t *testing.T) {
+	// A capsule from collect/from-run has a replay/ dir but no source/ tree.
+	capDir := t.TempDir()
+	e := NewEngine(nil)
+	if err := e.Generate(sampleCapsule(), capDir, Options{}); err != nil {
+		t.Fatal(err)
+	}
+	ctxDir, err := prepareBuildContext(capDir, filepath.Join(capDir, "source"))
+	if err != nil {
+		t.Fatalf("prepareBuildContext with missing source must not fail: %v", err)
+	}
+	defer os.RemoveAll(ctxDir)
+
+	if _, err := os.Stat(filepath.Join(ctxDir, "source", ".keep")); err != nil {
+		t.Fatalf("expected stubbed source/.keep: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(ctxDir, "replay", "Dockerfile")); err != nil {
+		t.Fatalf("expected replay/Dockerfile copied into context: %v", err)
+	}
+}
+
+func TestPrepareBuildContext_WithSource(t *testing.T) {
+	capDir := t.TempDir()
+	e := NewEngine(nil)
+	if err := e.Generate(sampleCapsule(), capDir, Options{}); err != nil {
+		t.Fatal(err)
+	}
+	srcDir := filepath.Join(capDir, "source")
+	if err := os.MkdirAll(srcDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(srcDir, "main.py"), []byte("print(1)\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ctxDir, err := prepareBuildContext(capDir, srcDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(ctxDir)
+
+	if _, err := os.Stat(filepath.Join(ctxDir, "source", "main.py")); err != nil {
+		t.Fatalf("expected real source copied into context: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(ctxDir, "source", ".keep")); err == nil {
+		t.Fatal("did not expect stub .keep when source is present")
+	}
+}
+
+func TestDirExists(t *testing.T) {
+	dir := t.TempDir()
+	if !dirExists(dir) {
+		t.Fatal("existing dir reported missing")
+	}
+	if dirExists("") {
+		t.Fatal("empty path reported as dir")
+	}
+	if dirExists(filepath.Join(dir, "nope")) {
+		t.Fatal("missing path reported as dir")
+	}
+	f := filepath.Join(dir, "file")
+	if err := os.WriteFile(f, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if dirExists(f) {
+		t.Fatal("regular file reported as dir")
+	}
+}
+
 func TestShellEscape(t *testing.T) {
 	cases := map[string]string{
 		"":          "''",

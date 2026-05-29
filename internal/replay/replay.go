@@ -311,31 +311,11 @@ func (e *Engine) Run(ctx context.Context, c *capsule.Capsule, capsuleDir, source
 	tag := "reproforge-replay:" + shortFingerprint(c.Failure.Fingerprint)
 
 	// Build context directory: capsuleDir/replay + sourceDir
-	ctxDir, err := os.MkdirTemp("", "rf-build-*")
+	ctxDir, err := prepareBuildContext(capsuleDir, sourceDir)
 	if err != nil {
 		return Outcome{}, err
 	}
 	defer os.RemoveAll(ctxDir)
-
-	if err := os.MkdirAll(filepath.Join(ctxDir, "source"), 0o755); err != nil {
-		return Outcome{}, err
-	}
-	if err := os.MkdirAll(filepath.Join(ctxDir, "replay"), 0o755); err != nil {
-		return Outcome{}, err
-	}
-	if sourceDir != "" {
-		if err := copyTree(sourceDir, filepath.Join(ctxDir, "source")); err != nil {
-			return Outcome{}, fmt.Errorf("copy source: %w", err)
-		}
-	} else {
-		// stub source directory so the COPY succeeds
-		if err := os.WriteFile(filepath.Join(ctxDir, "source", ".keep"), []byte("no source available\n"), 0o644); err != nil {
-			return Outcome{}, err
-		}
-	}
-	if err := copyTree(filepath.Join(capsuleDir, "replay"), filepath.Join(ctxDir, "replay")); err != nil {
-		return Outcome{}, fmt.Errorf("copy replay: %w", err)
-	}
 
 	if opts.DryRun {
 		e.Logger.Info("dry-run replay", "image", image, "mode", opts.Mode, "network", opts.Network)
@@ -432,6 +412,44 @@ func shortFingerprint(fp string) string {
 		fp = "unknown"
 	}
 	return fp
+}
+
+// prepareBuildContext assembles a docker build context (source + replay) in a
+// fresh temp dir. A missing or empty sourceDir is tolerated: capsules produced
+// by collect/from-run contain logs and workflow YAML but no repo checkout, so
+// the source tree is stubbed with a placeholder file rather than failing the
+// whole replay. The caller owns ctxDir and must remove it.
+func prepareBuildContext(capsuleDir, sourceDir string) (string, error) {
+	ctxDir, err := os.MkdirTemp("", "rf-build-*")
+	if err != nil {
+		return "", err
+	}
+	if err := os.MkdirAll(filepath.Join(ctxDir, "source"), 0o755); err != nil {
+		return "", err
+	}
+	if err := os.MkdirAll(filepath.Join(ctxDir, "replay"), 0o755); err != nil {
+		return "", err
+	}
+	if dirExists(sourceDir) {
+		if err := copyTree(sourceDir, filepath.Join(ctxDir, "source")); err != nil {
+			return "", fmt.Errorf("copy source: %w", err)
+		}
+	} else if err := os.WriteFile(filepath.Join(ctxDir, "source", ".keep"), []byte("no source available\n"), 0o644); err != nil {
+		return "", err
+	}
+	if err := copyTree(filepath.Join(capsuleDir, "replay"), filepath.Join(ctxDir, "replay")); err != nil {
+		return "", fmt.Errorf("copy replay: %w", err)
+	}
+	return ctxDir, nil
+}
+
+// dirExists reports whether p names an existing directory.
+func dirExists(p string) bool {
+	if p == "" {
+		return false
+	}
+	info, err := os.Stat(p)
+	return err == nil && info.IsDir()
 }
 
 // copyTree recursively copies src into dst.
